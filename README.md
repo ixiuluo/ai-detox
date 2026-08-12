@@ -55,7 +55,7 @@ ai-detox/
 │   └── plugin.json           # 插件清单（版本 / 授权 / 来源）
 ├── SKILL.md                  # 方法论：七层扫描、九类清单、六种改写策略
 ├── data/
-│   └── ai-patterns.json      # 特征词库（106 条模式，机器可读）
+│   └── ai-patterns.json      # 特征词库（147 条模式，机器可读）
 ├── scripts/
 │   └── scan.py               # 确定性扫描器（Phase 1）
 ├── LICENSE                   # MIT
