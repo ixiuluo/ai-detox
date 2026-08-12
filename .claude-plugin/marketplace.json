@@ -1,0 +1,18 @@
+{
+  "name": "ai-detox",
+  "owner": {
+    "name": "ixiuluo"
+  },
+  "metadata": {
+    "description": "AI特征诊断与去除：七层扫描(L1-L7)+九类清单+六种改写策略，把中文学术文本改写成自然的人类写作"
+  },
+  "plugins": [
+    {
+      "name": "ai-detox",
+      "description": "AI特征诊断与去除（七层扫描/九类排查/六种改写）",
+      "source": "./",
+      "category": "writing",
+      "tags": ["ai", "writing", "academic", "detox", "claude-code"]
+    }
+  ]
+}

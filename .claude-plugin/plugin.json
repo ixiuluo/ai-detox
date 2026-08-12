@@ -1,0 +1,13 @@
+{
+  "name": "ai-detox",
+  "description": "AI特征诊断与去除：对中文学术文本做七层扫描(L1-L7)定位AI痕迹，按九类清单排查，用六种策略改写为自然的人类学术写作",
+  "version": "1.0.0",
+  "author": {
+    "name": "ixiuluo"
+  },
+  "homepage": "https://github.com/ixiuluo/ai-detox",
+  "repository": "https://github.com/ixiuluo/ai-detox",
+  "license": "MIT",
+  "keywords": ["ai", "writing", "academic", "detox"],
+  "skills": "./"
+}
