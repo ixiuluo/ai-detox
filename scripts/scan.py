@@ -27,6 +27,18 @@ SEV_ORDER = {"high": 3, "medium": 2, "low": 1, "info": 0}
 SEV_LABEL = {"high": "高危🔴", "medium": "中危🟡", "low": "低危", "info": "参考"}
 FLAG_MAP = {"MULTILINE": re.MULTILINE, "DOTALL": re.DOTALL, "IGNORECASE": re.IGNORECASE}
 
+# 统计层：常见空洞连接词与借喻场（借鉴"识别动作而非字面"的思想，代码原创）
+CONJUNCTIONS = ("因为", "所以", "但是", "然而", "同时", "此外", "而且", "并且", "因此", "不仅", "一方面", "另一方面")
+METAPHOR_FIELDS = {
+    "温度": ("降温", "升温", "冷却", "余温", "滚烫", "微凉"),
+    "生死战争": ("杀死", "死因", "战场", "开火", "引爆", "硝烟"),
+    "建筑灾害": ("坍塌", "崩塌", "地基", "砖头", "支柱", "废墟"),
+    "仓储租赁": ("仓库", "库房", "租金", "取货", "入库", "库存"),
+    "道路竞赛": ("赛道", "跑道", "岔路", "十字路口", "终点线", "门槛"),
+    "机器器官": ("齿轮", "引擎", "发动机", "血管", "骨架", "肌肉"),
+    "海洋航行": ("蓝海", "浪潮", "潮水", "航船", "灯塔", "彼岸"),
+}
+
 
 def parse_args(argv):
     text = None
@@ -132,31 +144,131 @@ def _hit(p, matched, s, e, text):
     }
 
 
+def han_count(text):
+    """统计汉字数（忽略标点、数字与字母）。"""
+    return len(re.findall(r"[一-鿿]", text))
+
+
 def sentence_stats(text):
-    sents = [s.strip() for s in re.split(r"[。！？；]", text) if len(s.strip()) >= 2]
+    """句长统计：均值/标准差/变异系数。模型句长彼此接近，人写长短差距大。"""
+    sents = [s for s in re.split(r"[。！？；\n]", text) if han_count(s.strip()) >= 2]
+    result = {"sentence_count": len(sents), "mean": None, "std": None, "cv": None, "uniform": False, "note": ""}
     if len(sents) < 3:
-        return {"sentence_count": len(sents), "std": None, "mean": None, "note": "句子数不足，跳过句长分析"}
-    lens = [len(s) for s in sents]
-    std = statistics.pstdev(lens)
+        result["note"] = "句子数不足，跳过句长分析"
+        return result
+    lens = [han_count(s) for s in sents]
     mean = statistics.mean(lens)
-    note = ""
+    std = statistics.pstdev(lens)
+    cv = std / mean if mean else 0
+    result["mean"] = round(mean, 1)
+    result["std"] = round(std, 1)
+    result["cv"] = round(cv, 2)
+    notes = []
     if std < 8:
-        note = "⚠ 句长标准差<8，句式可能过于均匀"
-    return {"sentence_count": len(sents), "std": round(std, 1), "mean": round(mean, 1), "note": note}
+        notes.append("⚠ 句长标准差<8，句式可能过于均匀")
+        result["uniform"] = True
+    if len(sents) >= 12 and cv < 0.4:
+        notes.append("⚠ 句长变异系数<0.4，长短句缺乏变化")
+    result["note"] = "；".join(notes)
+    return result
 
 
 def para_stats(text):
+    """段落统计：长度变异系数与短段连击。"""
     paras = [p.strip() for p in text.split("\n") if len(p.strip()) > 10]
+    result = {"para_count": len(paras), "cv": None, "short_streak": 0, "note": ""}
     if len(paras) < 2:
-        return {"para_count": len(paras), "cv": None, "note": ""}
+        return result
     lens = [len(p) for p in paras]
     mean = statistics.mean(lens)
     std = statistics.pstdev(lens)
     cv = std / mean if mean else 0
-    note = ""
+    result["cv"] = round(cv, 2)
+    notes = []
     if cv < 0.25:
-        note = "⚠ 段落长度变异系数<0.25，段落可能过于均匀"
-    return {"para_count": len(paras), "cv": round(cv, 2), "note": note}
+        notes.append("⚠ 段落长度变异系数<0.25，段落可能过于均匀")
+    streak = max_streak = 0
+    for p in paras:
+        if han_count(p) <= 24 and len(re.findall(r"[。！？]", p)) <= 1:
+            streak += 1
+            max_streak = max(max_streak, streak)
+        else:
+            streak = 0
+    result["short_streak"] = max_streak
+    if max_streak >= 4:
+        notes.append(f"⚠ 连续{max_streak}段短句，节奏像固定鼓点")
+    result["note"] = "；".join(notes)
+    return result
+
+
+def conjunction_density(text):
+    """连词密度：空洞连接词占句子的比例，偏高说明句间靠连接词硬转。"""
+    sents = [s for s in re.findall(r"[^。！？；\n]+[。！？；]?", text) if han_count(s) >= 2]
+    total = len(sents)
+    count = sum(text.count(c) for c in CONJUNCTIONS)
+    density = round(count / total, 2) if total else 0
+    note = ""
+    if total and density > 0.8:
+        note = f"⚠ 连词密度{density}偏高，句间多靠连接词硬转，缺逻辑承接"
+    return {"count": count, "sentence_count": total, "density": density, "note": note}
+
+
+def heavy_de_sentences(text):
+    """'的'字长句：汉字≥38 且含≥4 个'的'，主干被定语压到后面。"""
+    matches = []
+    for m in re.finditer(r"[^。！？\n]+[。！？]?", text):
+        value = m.group()
+        if han_count(value) >= 38 and value.count("的") >= 4:
+            matches.append(value.strip())
+    return {"count": len(matches), "examples": matches[:3]}
+
+
+def anaphora_runs(text):
+    """同字排比：一句内 3+ 小句用同一两字开头，模板化排比。"""
+    runs = []
+    for m in re.finditer(r"[^。！？\n]+[。！？]?", text):
+        sentence = m.group()
+        clauses = [c.strip() for c in re.split(r"[，、；,;]", sentence) if han_count(c.strip()) >= 3]
+        if len(clauses) < 3:
+            continue
+        streak = 1
+        for prev, cur in zip(clauses, clauses[1:]):
+            if prev[:2] == cur[:2] and re.match(r"[一-鿿]{2}", cur):
+                streak += 1
+                if streak >= 3:
+                    runs.append(sentence.strip())
+                    break
+            else:
+                streak = 1
+    return {"count": len(runs), "examples": runs[:3]}
+
+
+def bracket_highlights(text):
+    """「」金句密度：短括号短语过密说明在批量造金句。"""
+    matches = list(re.finditer(r"[「『][^」』\n]{1,6}[」』]", text))
+    han = han_count(text)
+    density = round(len(matches) / max(1, han) * 1000, 2)
+    note = ""
+    if len(matches) >= 3 and density > 5:
+        note = f"⚠ 「」金句密度{density}‰，可能批量造金句"
+    return {"count": len(matches), "density": density, "note": note}
+
+
+def metaphor_clusters(text):
+    """借喻簇：800 字内出现≥3 套借喻场，抽象内容靠比喻包装。"""
+    hits = []
+    for field, words in METAPHOR_FIELDS.items():
+        for w in words:
+            for m in re.finditer(re.escape(w), text):
+                hits.append((m.start(), field, w))
+    hits.sort()
+    for i, (start, _, _) in enumerate(hits):
+        window = [h for h in hits[i:] if h[0] - start <= 800]
+        fields = {h[1] for h in window}
+        if len(fields) >= 3:
+            ctx = text[max(0, start - 30): start + 30].replace("\n", " ")
+            return {"found": True, "fields": sorted(fields), "context": ctx}
+    return {"found": False, "fields": [], "context": ""}
 
 
 def build_report(text, hits, dict_meta, min_sev):
@@ -177,7 +289,15 @@ def build_report(text, hits, dict_meta, min_sev):
             "layers_flagged": [],
         },
         "layers": {},
-        "structure": {"sentence": sentence_stats(text), "paragraph": para_stats(text)},
+        "structure": {
+            "sentence": sentence_stats(text),
+            "paragraph": para_stats(text),
+            "conjunction": conjunction_density(text),
+            "de_heavy": heavy_de_sentences(text),
+            "anaphora": anaphora_runs(text),
+            "brackets": bracket_highlights(text),
+            "metaphors": metaphor_clusters(text),
+        },
     }
     for layer, layer_name in layers.items():
         hits_l = by_layer.get(layer, [])
@@ -231,10 +351,25 @@ def print_report(report, layers_meta):
     print("\n" + "=" * 60)
     print("结构统计（参考，供 Phase 2 盲审使用）")
     st = report["structure"]["sentence"]
-    print(f"  句长: 共{st['sentence_count']}句, 均值{st['mean']}字, 标准差{st['std']}  {st['note']}")
+    print(f"  句长: 共{st['sentence_count']}句, 均值{st['mean']}字, 标准差{st['std']}, 变异系数{st['cv']}  {st['note']}")
     pt = report["structure"]["paragraph"]
     if pt["cv"] is not None:
-        print(f"  段落: 共{pt['para_count']}段, 长度变异系数{pt['cv']}  {pt['note']}")
+        print(f"  段落: 共{pt['para_count']}段, 长度变异系数{pt['cv']}, 短段连击{pt['short_streak']}  {pt['note']}")
+    cj = report["structure"]["conjunction"]
+    if cj["count"]:
+        print(f"  连词: {cj['count']}处/{cj['sentence_count']}句, 密度{cj['density']}  {cj['note']}")
+    dh = report["structure"]["de_heavy"]
+    if dh["count"]:
+        print(f"  '的'字长句: {dh['count']}句, 例: {' / '.join(e[:24] for e in dh['examples'])}")
+    an = report["structure"]["anaphora"]
+    if an["count"]:
+        print(f"  同字排比: {an['count']}句, 例: {' / '.join(e[:24] for e in an['examples'])}")
+    bk = report["structure"]["brackets"]
+    if bk["count"]:
+        print(f"  「」金句: {bk['count']}处, 密度{bk['density']}‰  {bk['note']}")
+    mp = report["structure"]["metaphors"]
+    if mp["found"]:
+        print(f"  借喻簇: 800字内{len(mp['fields'])}套借喻场({'/'.join(mp['fields'])}) …{mp['context']}")
     print("=" * 60)
     if s["layers_flagged"]:
         print(f"⚠ 需改写: 层级 {', '.join(s['layers_flagged'])}（命中/500字≥3 或 高危≥2）")
